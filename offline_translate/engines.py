@@ -46,7 +46,8 @@ class GoogleGTX(Engine):
     name = "google"
 
     def __init__(self, timeout: float = DEFAULT_TIMEOUT, client: httpx.Client | None = None):
-        self._client = client or httpx.Client(timeout=timeout)
+        # follow_redirects：clients5 在部分地区会先回 302，不跟随会拿不到 JSON（实测）
+        self._client = client or httpx.Client(timeout=timeout, follow_redirects=True)
         self._own_client = client is None
 
     def translate(self, text: str, src: str, target: str) -> str:
@@ -71,7 +72,7 @@ class GoogleChrome(Engine):
     name = "google_chrome"
 
     def __init__(self, timeout: float = DEFAULT_TIMEOUT, client: httpx.Client | None = None):
-        self._client = client or httpx.Client(timeout=timeout)
+        self._client = client or httpx.Client(timeout=timeout, follow_redirects=True)
         self._own_client = client is None
 
     def translate(self, text: str, src: str, target: str) -> str:
@@ -96,6 +97,20 @@ class GoogleChrome(Engine):
     def close(self):
         if self._own_client:
             self._client.close()
+
+
+def normalize_en_case(text: str) -> str:
+    """ASR 输出常全大写；Argos en→zh 按小写语料训练，全大写会被当专名音译。
+
+    但不能整句 .lower()——会把专名/缩写一起打碎：实测
+    'AI technology is developing rapidly.' 降为小写后 en→zh 输出 'i 技术…'。
+    只在「大写字母占比 ≥70%」（即 ASR 全大写风格）时才整体转小写。
+    """
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return text
+    upper = sum(1 for ch in letters if ch.isupper())
+    return text.lower() if upper / len(letters) >= 0.7 else text
 
 
 def is_degenerate(text: str) -> bool:
@@ -234,8 +249,8 @@ class LocalCT2(Engine):
         if src == "en":
             # Argos 的 en→zh 模型是按小写语料训练的；流式 ASR 输出全大写，
             # 直接送进去会被当成专名音译（实测 'THE WEATHER IS VERY GOOD' → '韦瑟是非常好的'，
-            # 转小写后 → '天气不错'）。
-            text = text.lower()
+            # 转小写后 → '天气不错'）。但不能整句小写，见 normalize_en_case。
+            text = normalize_en_case(text)
         tr, sp = self._load(src, tgt)
         tokens = sp.encode(text, out_type=str)
         if not tokens:

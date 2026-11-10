@@ -1,0 +1,24 @@
+# 完整运行依赖（服务 + 流式/离线 ASR + 翻译引擎）
+# 安装：.venv\Scripts\python.exe -m pip install -r requirements.txt
+# 版本下限按 2026-11 实测可用的版本给出；未锁死上限，便于跟进上游修复。
+
+# --- HTTP 服务 ---
+fastapi>=0.110
+uvicorn>=0.27
+
+# --- 翻译引擎 ---
+httpx>=0.24                 # Google 免费端点 / 自定义引擎
+ctranslate2>=4.0            # 本地 CT2 翻译（复用 Argos 模型文件）
+sentencepiece>=0.1.99
+argostranslate>=1.9         # 离线兜底；模型用 install_offline_models.py 下载
+
+# --- 语音识别 ---
+numpy>=1.24
+faster-whisper>=1.0         # 语种嗅探 + 日/韩通道
+sherpa-onnx>=1.10           # 流式中英识别
+
+# --- 字幕文件编码识别 ---
+charset-normalizer>=3.0
+
+# --- 测试 / E2E（可选，仅跑 test_e2e.py 与 tests/e2e 时需要） ---
+websockets>=12

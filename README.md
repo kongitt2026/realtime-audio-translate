@@ -97,6 +97,7 @@ py -3.13 -m venv .venv
 
 | 变量 | 默认 | 作用 | 定义位置 |
 |---|---|---|---|
+| `LIVESUB_HOST` / `LIVESUB_PORT` | `127.0.0.1` / `8790` | 服务监听地址与端口（只在 `python server/main.py` 直跑时生效；`启动.bat` 里写死了 8790 的地址，换端口需同步改脚本） | `server/main.py` |
 | `LIVESUB_ASR` | `auto` | `auto` 自动路由 / `stream` 强制流式 / `whisper` 强制 whisper | `server/browser_audio.py` |
 | `LIVESUB_LANG` | 空 | 全局语种提示（等价于所有连接都带 `?lang=`），跳过嗅探 | `server/browser_audio.py` |
 | `LIVESUB_MODEL` | `tiny` | whisper 通道模型档位，`base`/`small` 提精度但更慢 | `server/browser_audio.py` |
@@ -360,15 +361,17 @@ docs/同类方案对比_v1.0.md    开工前的同类开源方案横向对比与
 | `tests\test_integration.py` | pyttsx3 合成英文语音 → faster-whisper → 翻译 | 需要本机 SAPI 英文语音 |
 | `tests\test_e2e.py en\|ja\|ko` | 合成测试视频 → 起服务 → WS 收中文字幕 | 无，脚本自己拉起服务；ja/ko 需联网（edge-tts） |
 | `tests\test_asr_ja_ko.py` | 日/韩 ASR 精度（edge-tts 合成语料） | 需联网 |
-| `tests\test_translate_ja_ko.py` | 日/韩翻译 16 项 | 需联网（Google 免费端点） |
+| `tests\test_translate_ja_ko.py` | 日/韩翻译 16 项 | 需联网（Google 免费端点）；断网时自动降级到离线模型 |
+| `tests\test_api_guards.py` | 安全护栏 15 项（`/api/play` 协议白名单、`/ws` 来源校验） | **需先另开窗口启动服务**；WS 部分需 `websockets` |
 | `tests\e2e\test_ja_subtitle.py all` | 字幕解析 72 + HTTP 8 + 实时 15 | **需先另开窗口启动服务** |
 | `tests\verify_encoding.ps1` | PowerShell 编码 16 项 | 见下方「PowerShell 5.1 编码配置」 |
 
 统一前置：`$env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'`，否则 Windows 控制台输出日/韩文会乱码。
 
-以下数字均为 2026-11-09 本机实测：
+以下数字均为 2026-11-10 本机实测（同日做过一轮代码审查并修复，见「已知边界」）：
 
 - 单元测试 **12/12 通过**：四语识别（中/日/韩/英）、翻译缓存、中文跳过
+- 安全护栏测试 **15/15 通过**：`/api/play` 拒绝 `file://`、`concat:`、`pipe:`、`data:`、不存在的本地路径、空 url（均 400 且带可读 error）；`/ws` 拒绝外部 Origin、放行 `chrome-extension://` 与 `http://127.0.0.1`
 - 集成测试通过：pyttsx3 合成英文语音 → ASR 逐字正确（语种 en，置信度 0.98，关键词 4/4）→ 中文译文
 - 端到端冒烟通过：起服务 → 播放测试视频 → WS 收到 2 条字幕且均含中文译文
 - **日/韩语专项（2026-11-09 追加）**：`tests/test_asr_ja_ko.py`（edge-tts 合成 ja-JP/ko-KR 语音，免费无 Key）
@@ -379,7 +382,7 @@ docs/同类方案对比_v1.0.md    开工前的同类开源方案横向对比与
   | 韩语 | 오늘은 날씨가 정말 좋습니다.우리는 공원에 갈 거예요. | ko 0.99 | **0.0%** | 0.0% | 通过 | 今天天气真好。我们要去公园。 |
 
 - **端到端三语实测**：`tests\test_e2e.py ja|ko|en` 均通过，WS 各收到 2 条字幕、全部为真中文（已排除「日文汉字被误判为中文」的假通过）
-- **日/韩翻译专项（2026-11-09 抽包后复测）**：`tests\test_translate_ja_ko.py` **16/16 通过**（J1–J7 日、K1–K7 韩、E1 中文跳过、E2 空文本 400），全部 `engine=google_chrome`；校验原文回显、语种判定、关键词命中、数字保真（230/100）、换行与 `%` 保留、响应字节可 UTF-8 解码且无 U+FFFD/HTML 实体；`test_units.py` 同步 12/12
+- **日/韩翻译专项（2026-11-10 复测）**：`tests\test_translate_ja_ko.py` **13/16 通过**（J1–J7 全通过，K1/K3/K7 未达标）。当日本机两个 Google 端点均不可用（`translate.googleapis.com` 429、`clients5.google.com` 302），全部回落 `local_ct2` 离线链；日语 7/7 正常（含换行保留、数字保真、`AI` 不再被降成 `i`），韩语 3 条受 `ko→en→zh` 两跳离线模型质量限制（见「已知边界」）。校验项：原文回显、语种判定、关键词命中、数字保真（230/100）、换行与 `%` 保留、响应字节可 UTF-8 解码且无 U+FFFD/HTML 实体；引擎降级会打印 `~ 引擎降级：…` 告警，不藏成假绿。同日 `test_units.py` 12/12、`test_api_guards.py` 15/15、`test_integration.py` 通过
 - **编码与 Chrome 播放复验（2026-11-09，v1.4）**：`tests\verify_encoding.ps1` **16/16 通过**；Chrome 实测 HLS 与韩文视频均正常播放（`readyState=4`、`currentTime` 递增、`video.error=null`），字幕「Hello everyone…→大家好。今天天气很好。」「안녕하세요 여러분…→大家好。今天天气真好。」，控制台仅 `favicon.ico` 404（无编码影响）
 
 ## HTTP 端点（服务）
@@ -509,6 +512,9 @@ powershell -ExecutionPolicy Bypass -File "tests\verify_encoding.ps1"
 ## 已知边界
 
 - Argos 兜底译文质量弱于 Google，偶见直译腔；日/韩还要经英文中转（ja/ko→en→zh）二次损耗更大（实测「今日はとても良い天気です」→「今天天气不错」），仅在两个 Google 端点都不可用时启用，不影响出字幕
+- **Google 端点不可达时会全链路走离线模型**：实测 `translate.googleapis.com` 返回 429、`clients5.google.com` 返回 302（已加 `follow_redirects` 跟随），两个都失败后引擎链冷却 300s，期间全部由 `local_ct2` 承担；此时译文可用但质量下降，属环境限制不是代码缺陷
+- **韩语离线质量明显弱于日语**：`ko→en→zh` 两跳下，2026-11-10 实测 3 条用例未达标——K1「오늘 날씨가 정말 좋네요.」译成「我真的很好今天。 。 。」、K3「100부 복사」把 100 换算成「一百」、K7 符号密集行首行被判退化解回退原文。根因是缺 ko→zh 直连离线模型（见「后续优化方向」第 4 条）
+- **符号密集的短行可能整体回退原文**：离线模型对「「重要」※注意：50%OFF！」这类行会输出含 `⁇`(U+2047) 的退化解，`is_degenerate()` 拦截后回退原文并置 `failed: true`，调用方会看到 `engine` 为空但 `translated == original`——这是有意的安全回退，不是 bug
 - 日/韩语 ASR 准确率已实测（合成朗读音 0% 字错率），但**合成音比真实口语干净，真实场景会下降**；真实影视剧对白、方言、快语速未实测
 - 日语音同音字会按假名输出（如「午後は」识别成「ごごは」），语义不受影响但字面不一致
 - 纯汉字无假名的日语句子会被 `detect_lang` 判成中文而跳过翻译（四语识别的固有取舍）
@@ -521,7 +527,7 @@ powershell -ExecutionPolicy Bypass -File "tests\verify_encoding.ps1"
 | 双击 `启动.bat` 闪退 | `.venv` 不存在或依赖没装全 | 按「从零安装」①② 重建环境；窗口跑不起来时先手动执行 `.venv\Scripts\python.exe server\main.py` 看完整报错 |
 | 页面能开，但一直没有字幕 | 视频本身没声音／标签页被静音／`<video muted>` | tabCapture 抓的是标签页实际输出的声音，测试时必须保持有声且未静音 |
 | 首条字幕要等 4 秒以上 | 语种选了「自动识别」，服务端要先攒 2s 音频做嗅探 | 在扩展弹窗里显式选中文/英语/日语/韩语，可省掉嗅探（首条约 1.2-1.9s） |
-| 端口 8790 被占用 | 上一次服务没退干净 | `netstat -ano \| findstr 8790` 找到 PID 后 `taskkill /PID <pid> /F`；端口目前是硬编码，要换需同时改 `server/main.py` 末尾 `uvicorn.run(..., port=8790)` 与 `启动.bat` 里的两处地址 |
+| 端口 8790 被占用 | 上一次服务没退干净 | `netstat -ano \| findstr 8790` 找到 PID 后 `taskkill /PID <pid> /F`；或换个端口启动：`set LIVESUB_PORT=8791` 后再执行启动脚本（`LIVESUB_HOST` 同理可改监听地址，默认 `127.0.0.1`） |
 | 扩展点「开始字幕」报 `Extension has not been invoked for the current page` | Chrome 的 activeTab 安全模型要求先在该标签页手动点一次扩展图标 | 每个新标签页都要点一次图标，无法用脚本代劳 |
 | 改了 `chrome_ext/` 代码但行为没变 | 扩展没重载，仍在跑旧版本 | `chrome://extensions/` → 对应扩展 → 点圆形「重新加载」 |
 | 日语字幕出现「豆腐块」方框 | 系统缺日文字形 | 见「多语言字体 fallback（v1.7）」；Windows 装「日语补充字体」即可 |

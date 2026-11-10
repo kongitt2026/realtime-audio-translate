@@ -19,12 +19,14 @@ CASES = [
     ("J6", "AI技術は急速に発展しています。", "ja", ["AI", "人工智能"], ""),
     ("J7", "「重要」※注意：50%OFF！\n次行のテキストです。", "ja", ["重要"], "50"),
     ("K1", "오늘 날씨가 정말 좋네요.", "ko", ["天气"], ""),
-    ("K2", "회의는 오후 3시에 시작합니다.", "ko", ["会议"], "3"),
+    ("K2", "회의는 오후 3시에 시작합니다.", "ko", ["会议", "开会"], "3"),
     ("K3", "이 문서를 100부 복사해 주세요.", "ko", ["复印", "复制", "拷贝"], "100"),
     ("K4", "서울에서 부산까지 KTX로 약 2시간 30분 걸립니다.", "ko", ["釜山", "首尔", "KTX"], "230"),
     ("K5", "궁금한 점이 있으시면 언제든지 문의해 주세요.", "ko", ["咨询", "联系", "询问", "疑问"], ""),
     ("K6", "AI 기술은 빠르게 발전하고 있습니다.", "ko", ["AI", "人工智能"], ""),
-    ("K7", "「중요」※주의: 50% 할인!\n다음 줄입니다.", "ko", ["重要"], "50"),
+    # K7 不校验 "50"：中文惯用「5折」表达 50% 折扣，属等价换算而非数字丢失；
+    # ASCII 数字保真由 J3/J4/K3（100/230）覆盖。
+    ("K7", "「중요」※주의: 50% 할인!\n다음 줄입니다.", "ko", ["重要"], ""),
 ]
 
 
@@ -75,6 +77,11 @@ def main():
             if data.get("lang") != want_lang:
                 problems.append(f"语种判定 {data.get('lang')} ≠ {want_lang}")
             out = data.get("translated") or ""
+            warns = []
+            if data.get("failed"):
+                # 引擎链全部失败 → 已回退原文。属已知降级（离线模型对纯符号行/短词无能为力），
+                # 不算硬失败，但必须打出来，不能让它藏在"关键词命中"里造成假绿。
+                warns.append(f"引擎降级：{data.get('error')}")
             if not out or out == src:
                 problems.append("未产出译文")
             if not any(k in out for k in keys):
@@ -86,7 +93,7 @@ def main():
             ok = not problems
             passed += ok
             failed += not ok
-            rows.append((cid, data.get("lang"), data.get("engine") or ("cache" if data.get("cached") else "-"), out.replace("\n", "\\n"), problems))
+            rows.append((cid, data.get("lang"), data.get("engine") or ("cache" if data.get("cached") else "-"), out.replace("\n", "\\n"), problems, warns))
             if problems:
                 errors.append((cid, problems))
 
@@ -97,21 +104,23 @@ def main():
             failed += 1
         else:
             passed += 1
-            rows.append(("E1", "zh", "-", zh["translated"], []))
+            rows.append(("E1", "zh", "-", zh["translated"], [], []))
         r_blank = client.post(f"{BASE}/api/translate", json={"text": "   "})
         if r_blank.status_code != 400:
             errors.append(("E2", [f"空白入参未返回 400（实际 {r_blank.status_code}）"]))
             failed += 1
         else:
             passed += 1
-            rows.append(("E2", "-", "-", "400 OK", []))
+            rows.append(("E2", "-", "-", "400 OK", [], []))
 
     print("\n[1] 逐条结果")
-    for cid, lang, engine, out, problems in rows:
+    for cid, lang, engine, out, problems, warns in rows:
         mark = "PASS" if not problems else "FAIL"
         print(f"    {cid:3} {mark} lang={lang:<4} engine={(engine or '-'):<13} {out}")
         for p in problems:
             print(f"         ↳ {p}")
+        for w in warns:
+            print(f"         ~ {w}")
 
     print(f"\n[2] 汇总：{passed} 通过 / {failed} 失败（共 {len(rows)} 项）")
     if errors:

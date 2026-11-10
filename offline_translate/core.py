@@ -49,6 +49,33 @@ class Translator:
         if lang in ("zh", "other"):
             return {"original": text, "translated": text, "lang": lang, "target": target, "skipped": True}
 
+        # 多行文本按行翻译再拼回：引擎（Google gtx / CT2）会把换行符吞掉，
+        # 字幕里的两行台词会粘成一行（实测 J7/K7）。空行原样保留。
+        if "\n" in text:
+            outs, engine_used, first_err = [], None, None
+            degraded = False
+            for line in text.split("\n"):
+                if not line.strip():
+                    outs.append(line)
+                    continue
+                r = self._translate_line(line.strip(), lang, target)
+                outs.append(r["translated"])
+                engine_used = engine_used or r.get("engine")
+                # 子行失败时 translated 是原文，必须把失败状态带出来，
+                # 否则调用方看到的是中英/中韩混排却以为翻译成功了。
+                if r.get("failed") and not degraded:
+                    degraded = True
+                    first_err = r.get("error")
+            out = {"original": text, "translated": "\n".join(outs), "lang": lang,
+                   "target": target, "engine": engine_used or "multiline"}
+            if degraded:
+                out.update({"failed": True, "error": first_err})
+            return out
+
+        return self._translate_line(text, lang, target)
+
+    def _translate_line(self, text: str, lang: str, target: str) -> dict:
+        """单行翻译：缓存 → 引擎链 → 退化判定。translate() 与多行分支共用。"""
         key = f"{lang}::{target}::{text}"
         if self.cache_cap:
             with self._lock:
