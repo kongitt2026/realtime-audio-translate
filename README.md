@@ -4,7 +4,7 @@
 
 > **项目定位（2026-11-10）**：本地优先的实时字幕翻译工具，**不上架 Chrome 应用商店**（省 $5 注册费与审核风险），通过开发者模式加载扩展使用；全链路本地推理、零云依赖、零 API 费用。
 >
-> **开源**：本项目以 MIT 许可证开源，欢迎 issue / PR。内部迭代日志与验证截图含开发环境信息，不随仓库发布。
+> **开源**：本项目以 MIT 许可证开源，欢迎 issue / PR。开发过程日志与验证截图含本机环境信息，不随仓库发布。
 
 ## 与同类方案的关系
 
@@ -29,7 +29,10 @@
 ├─ README.md                 # 使用说明、实测数据、已知限制
 ├─ LICENSE                   # MIT
 ├─ .gitignore
-├─ docs/                     # 设计与验证文档
+├─ pyproject.toml            # 包元数据（offline_translate 可 pip install -e . 独立安装）
+├─ install_offline_models.py # 一键安装 Argos ja→en / ko→en / en→zh 离线翻译模型（约 225MB）
+├─ docs/                     # 设计、同类方案对比、验证报告
+│   ├─ 同类方案对比_v1.0.md
 │   ├─ 插件化封装方案_v1.0.md
 │   └─ 字幕显示问题_根因与验证报告_v1.7.md
 ├─ server/                   # FastAPI 服务（8790）：WS 音频管道、流式 ASR、轨道路由
@@ -42,12 +45,76 @@
 │   ├─ e2e/                  # 端到端脚本（CDP 装扩展 + 真视频实测）
 │   ├─ bench/                # 性能基准（ASR / MT 线程数 / 流式管道）
 │   ├─ manual/               # 一次性探针（延迟、路由、退化解、模型下载）
-│   ├─ legacy_gui/           # 旧 GUI 点击方案（已被 CDP 取代，仅留档）
+│   ├─ legacy_gui/           # 旧 GUI 点击方案（已被 CDP 取代，仅本地留档、不入库）
 │   ├─ fixtures/             # 测试素材（字幕编码样本、TTS 音频、测试视频）
 │   └─ _tmp/                 # 临时运行目录（日志/缓存，不入库）
 ├─ logs/                     # 运行日志 logs/server.log（不入库）
 └─ static_hls/               # RTMP 转 HLS 的运行期切片目录（不入库）
 ```
+
+## 从零安装（首次使用）
+
+仓库**不含** Python 虚拟环境、ASR 模型与翻译模型（体积大、与机器相关），clone 后按三步准备。实测环境：Windows 11 + Python 3.13 + 纯 CPU，**无需显卡、无需系统 ffmpeg**（用 imageio-ffmpeg 内置二进制）。
+
+### ① 建虚拟环境、装依赖
+
+```powershell
+cd <本项目根目录>
+py -3.13 -m venv .venv
+.venv\Scripts\python.exe -m pip install -U pip
+.venv\Scripts\python.exe -m pip install fastapi uvicorn httpx websockets numpy charset-normalizer sherpa-onnx ctranslate2 sentencepiece faster-whisper imageio-ffmpeg argostranslate edge-tts pyttsx3
+```
+
+以上为 2026-11-10 实测版本：fastapi 0.162.2 / uvicorn 0.54.0 / httpx 0.28.1 / websockets 17.4 / numpy 2.5.4 / sherpa-onnx 2.0.1 / ctranslate2 4.8.5 / sentencepiece 0.2.3 / faster-whisper 1.2.1 / imageio-ffmpeg 0.8.1 / argostranslate 1.11.0 / edge-tts 7.3.1 / pyttsx3 2.99。
+
+### ② 放模型（两套，缺了会降级）
+
+**a) 翻译模型（必须有，否则出不来中文）** —— 本地 CT2 翻译直接复用 Argos 模型包目录 `%USERPROFILE%\.local\share\argos-translate\packages`：
+
+```powershell
+.venv\Scripts\python.exe install_offline_models.py
+```
+
+装完 `ja→en`、`ko→en`、`en→zh` 三个包（约 225MB，官方免费源），`local_ct2` 引擎即可离线出中文；细节见下方「离线日/韩翻译模型安装」。
+
+**b) 流式 ASR 模型（要低延迟才需要）** —— 从 [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) 下载对应 `tar.bz2`，解压到 `models/` 并**保持目录名不变**：
+
+| 语种 | 目录名 | int8 encoder |
+|---|---|---|
+| 中/英 | `sherpa-onnx-streaming-zipformer-small-bilingual-zh-en-2023-02-16` | 约 50MB |
+| 日 | `sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10`（sherpa 无日语单语流式模型，用八语种包） | 296.6MB |
+| 韩 | `sherpa-onnx-streaming-zipformer-korean-2024-06-16` | 127MB |
+
+不放模型服务也能起，会自动回落 faster-whisper（首次运行自动下载 small 模型），代价是首条字幕 2.7-8.1s。
+
+### ③ 启动
+
+双击 `启动.bat`，浏览器自动打开 http://127.0.0.1:8790。健康检查：`/api/status`、`/api/engines`（看翻译链与离线可译语种）。
+
+## 环境变量（可选调参，不设即用默认值）
+
+改法是启动前设环境变量，例如 `set LIVESUB_DEBUG=1` 后再双击 `启动.bat`，或写进系统环境变量。**默认值已按 4 核 CPU 调过，改之前先看「作用」列。**
+
+| 变量 | 默认 | 作用 | 定义位置 |
+|---|---|---|---|
+| `LIVESUB_ASR` | `auto` | `auto` 自动路由 / `stream` 强制流式 / `whisper` 强制 whisper | `server/browser_audio.py` |
+| `LIVESUB_LANG` | 空 | 全局语种提示（等价于所有连接都带 `?lang=`），跳过嗅探 | `server/browser_audio.py` |
+| `LIVESUB_MODEL` | `tiny` | whisper 通道模型档位，`base`/`small` 提精度但更慢 | `server/browser_audio.py` |
+| `LIVESUB_SNIFF_SEC` | `2.0` | 自动识别时先攒多少秒音频做语种嗅探 | `server/browser_audio.py` |
+| `LIVESUB_LANG_MIN_PROB` | `0.5` | 嗅探置信度低于此值改走 whisper 通道 | `server/browser_audio.py` |
+| `LIVESUB_RMS_GATE` | `250` | 静音门限，低于此 RMS 的窗口不送 ASR（防 tiny 在静音处瞎编） | `server/browser_audio.py` |
+| `LIVESUB_DEBUG` | 空 | 设任意值即输出 `[dbg]` / `[asr]` 逐块日志 | `server/streaming_asr.py`、`server/main.py` |
+| `LIVESUB_STREAM_MODEL` | 内置 zh/en 目录 | 覆盖中/英流式模型目录 | `server/streaming_asr.py` |
+| `LIVESUB_STREAM_MODEL_JA` / `_KO` | 内置 ja/ko 目录 | 覆盖日/韩流式模型目录 | `server/streaming_asr.py` |
+| `LIVESUB_STREAM_THREADS` | `2` | sherpa-onnx 推理线程数（与翻译抢核，2 线程够用） | `server/streaming_asr.py` |
+| `LIVESUB_PARTIAL_MS` | `600` | 中间结果最短刷新间隔（毫秒） | `server/streaming_asr.py` |
+| `LIVESUB_PARTIAL_MIN_CHARS` | `3` | 少于该字符数的 partial 不推送 | `server/streaming_asr.py` |
+| `LIVESUB_RULE1_SILENCE` / `RULE2_SILENCE` | `1.0` / `0.4` | 断句规则：停顿多久判一句结束（秒） | `server/streaming_asr.py` |
+| `LIVESUB_RULE3_LEN` | `12` | 断句规则：单句最长字符数 | `server/streaming_asr.py` |
+| `LIVESUB_MT_GOOGLE` | `0` | 设 `1` 时流式管道优先走 Google 翻译（需该网络可达） | `server/streaming_asr.py` |
+| `LIVESUB_MT_TIMEOUT` | `1.2` | 流式管道单次翻译超时（秒） | `server/streaming_asr.py` |
+
+测试脚本另有 `LIVESUB_EXT`（扩展目录）、`CDP_PROFILE`（CDP 用户目录），见 `tests/e2e/cdp_e2e.py`。
 
 ## 开箱使用
 
@@ -188,7 +255,7 @@ ja/ko 原先只有 whisper 通道（首条 2.7-8.1s）。现已下载两套 sher
 **已知限制（如实标注）**
 
 1. **"字幕延迟 ≤1 秒"未达成**：服务端链路达标（音频块到达 → 字幕推出：final 128-490ms、partial 中位 ≈207ms，`LIVESUB_DEBUG=1` 真节奏实测），但**浏览器端到端首条字幕实测 1.66-2.54s**（2026-11-10 晚，真 Chrome + 真扩展 + B 站中/日/韩 + YouTube 英语，见「浏览器端到端实测」）。缺口来自采集缓冲（v1.14 已由 256ms 减半至 128ms/块）+ 流式 ASR 需要先攒到足够音频才吐首条 + 视频开头无语音时的等待，不是翻译慢。优化方向见 issue 讨论。
-2. **韩语译文质量弱于日/英**：ko 走 `ko→en→zh` 两跳（无 ko→zh 直连模型），实测多条明显错译。~~退化解未拦截~~问题已在 v1.14 修复：`is_degenerate()` 扩为四层判定（`⁇` 单字符黑名单 / 特殊字符占比 / 子串重复循环 / 纯标点），单测 12/12 通过。**韩语方向 2026-11-10 起冻结（老板指令）**，ko 两跳质量差不修。
+2. **韩语译文质量弱于日/英**：ko 走 `ko→en→zh` 两跳（无 ko→zh 直连模型），实测多条明显错译。~~退化解未拦截~~问题已在 v1.14 修复：`is_degenerate()` 扩为四层判定（`⁇` 单字符黑名单 / 特殊字符占比 / 子串重复循环 / 纯标点），单测 12/12 通过。**韩语方向自 2026-11-10 起冻结**，ko 两跳质量暂不修（改善需要 ko→zh 直连模型，欢迎 issue 讨论）。
 3. **ASR 语种**：流式 zipformer 已覆盖**中/英/日/韩**（三套模型，见上节）。`LangRoutePipeline` 未指定语种时先攒 2s 音频用 whisper 判语种，`zh/en/ja/ko` 且置信度 ≥0.5 走对应流式模型，其它语种或低置信回落 whisper 通道。已知语种用 `LIVESUB_LANG=ja` 或 `?lang=ja` 可**跳过嗅探**（首条 1.2-1.9s 到达）；自动嗅探除 2s 嗅探外，还要为重喂的缓存音频付一次整体解码（实测 554-1177ms），首条首轮 ≥4.3s、热态 ≈2.7-3.5s。未覆盖语种走 whisper 通道时仍是 2.7-8.1s。
 4. **翻译引擎**：本机访问 Google 两个免费端点均不通，默认只用 `local_ct2`；要启用 Google 需设环境变量 `LIVESUB_MT_GOOGLE=1`（会白等超时，不建议）。
 5. **一个标签页一次点击**不可绕过（Chrome 安全模型，见上）。
@@ -271,7 +338,7 @@ ja/ko 原先只有 whisper 通道（首条 2.7-8.1s）。现已下载两套 sher
 ```
 server/    main.py(服务) pipeline.py(拉流→ASR→翻译) browser_audio.py(扩展音频/语种路由/whisper通道)
            streaming_asr.py(中/英/日/韩流式ASR) subtitle_file.py(字幕文件编码识别+解析) translator.py(转发到 offline_translate 的兼容层) ffmpegbin.py(ffmpeg定位)
-offline_translate/  翻译内核插件（core/engines/lang/cli，可独立 pip 安装，详见 插件化封装方案_v1.0.md）
+offline_translate/  翻译内核插件（core/engines/lang/cli，可独立 pip 安装，详见 docs/插件化封装方案_v1.0.md）
 web/       index.html 播放器页
 chrome_ext/  Chrome MV3 扩展（manifest/background/offscreen/content + popup 语种弹窗，抓标签页音频→8790→页面浮字幕）
 tests/     test_units.py 单元(12项) test_translate_ja_ko.py 日韩翻译端到端(16项) test_integration.py TTS→ASR→翻译 test_asr_ja_ko.py 日韩ASR专项 test_e2e.py 端到端冒烟(支持 en/ja/ko) verify_encoding.ps1 终端/文件/网络编码验证(16项)
@@ -279,10 +346,27 @@ static_hls/ RTMP/RTSP 转 HLS 的临时分片目录
 启动.bat    一键启动
 install_offline_models.py  安装日/韩离线翻译模型（可选，0 元）
 pyproject.toml  插件打包元数据（name=offline-translate）
-插件化封装方案_v1.0.md  插件目录/接口/安装/兼容性完整说明
+docs/插件化封装方案_v1.0.md  插件目录/接口/安装/兼容性完整说明
+docs/同类方案对比_v1.0.md    开工前的同类开源方案横向对比与可复用点
 ```
 
-## 测试验证（2026-11-09 实测）
+## 测试验证
+
+**怎么跑**（全部是独立脚本，直接 `python` 跑，**不需要 pytest**）：
+
+| 脚本 | 覆盖 | 前置 |
+|---|---|---|
+| `tests\test_units.py` | 语种识别、翻译缓存与降级、管道去重（12 项） | 无，不起服务 |
+| `tests\test_integration.py` | pyttsx3 合成英文语音 → faster-whisper → 翻译 | 需要本机 SAPI 英文语音 |
+| `tests\test_e2e.py en\|ja\|ko` | 合成测试视频 → 起服务 → WS 收中文字幕 | 无，脚本自己拉起服务；ja/ko 需联网（edge-tts） |
+| `tests\test_asr_ja_ko.py` | 日/韩 ASR 精度（edge-tts 合成语料） | 需联网 |
+| `tests\test_translate_ja_ko.py` | 日/韩翻译 16 项 | 需联网（Google 免费端点） |
+| `tests\e2e\test_ja_subtitle.py all` | 字幕解析 72 + HTTP 8 + 实时 15 | **需先另开窗口启动服务** |
+| `tests\verify_encoding.ps1` | PowerShell 编码 16 项 | 见下方「PowerShell 5.1 编码配置」 |
+
+统一前置：`$env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'`，否则 Windows 控制台输出日/韩文会乱码。
+
+以下数字均为 2026-11-09 本机实测：
 
 - 单元测试 **12/12 通过**：四语识别（中/日/韩/英）、翻译缓存、中文跳过
 - 集成测试通过：pyttsx3 合成英文语音 → ASR 逐字正确（语种 en，置信度 0.98，关键词 4/4）→ 中文译文
@@ -341,7 +425,7 @@ translate("今日は良い天気です。")
 .venv\Scripts\pip.exe install -e ".[offline]"   # 加 Argos 离线兜底
 ```
 
-目录结构、引擎扩展、接口字段、兼容性矩阵见 [插件化封装方案_v1.0.md](插件化封装方案_v1.0.md)。
+目录结构、引擎扩展、接口字段、兼容性矩阵见 [插件化封装方案_v1.0.md](docs/插件化封装方案_v1.0.md)。
 
 ## 环境事实（已实测）
 
@@ -429,3 +513,41 @@ powershell -ExecutionPolicy Bypass -File "tests\verify_encoding.ps1"
 - 日语音同音字会按假名输出（如「午後は」识别成「ごごは」），语义不受影响但字面不一致
 - 纯汉字无假名的日语句子会被 `detect_lang` 判成中文而跳过翻译（四语识别的固有取舍）
 - 本地文件源 ffmpeg 不限速会瞬时读完，首条字幕等待偏长（窗口排队串行 ASR）；真实流式源无此现象
+
+## 常见问题（FAQ）
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 双击 `启动.bat` 闪退 | `.venv` 不存在或依赖没装全 | 按「从零安装」①② 重建环境；窗口跑不起来时先手动执行 `.venv\Scripts\python.exe server\main.py` 看完整报错 |
+| 页面能开，但一直没有字幕 | 视频本身没声音／标签页被静音／`<video muted>` | tabCapture 抓的是标签页实际输出的声音，测试时必须保持有声且未静音 |
+| 首条字幕要等 4 秒以上 | 语种选了「自动识别」，服务端要先攒 2s 音频做嗅探 | 在扩展弹窗里显式选中文/英语/日语/韩语，可省掉嗅探（首条约 1.2-1.9s） |
+| 端口 8790 被占用 | 上一次服务没退干净 | `netstat -ano \| findstr 8790` 找到 PID 后 `taskkill /PID <pid> /F`；端口目前是硬编码，要换需同时改 `server/main.py` 末尾 `uvicorn.run(..., port=8790)` 与 `启动.bat` 里的两处地址 |
+| 扩展点「开始字幕」报 `Extension has not been invoked for the current page` | Chrome 的 activeTab 安全模型要求先在该标签页手动点一次扩展图标 | 每个新标签页都要点一次图标，无法用脚本代劳 |
+| 改了 `chrome_ext/` 代码但行为没变 | 扩展没重载，仍在跑旧版本 | `chrome://extensions/` → 对应扩展 → 点圆形「重新加载」 |
+| 日语字幕出现「豆腐块」方框 | 系统缺日文字形 | 见「多语言字体 fallback（v1.7）」；Windows 装「日语补充字体」即可 |
+| 服务日志报 `model not found` / 直接回落 whisper | `models/` 下目录名被改名，或模型包没解压 | 目录名必须与「从零安装 ②b」表格完全一致；不放模型也能跑，只是首条延迟升到 2.7-8.1s |
+| 全屏播放时字幕看不见 | 站点全屏层级高于浮层 | 已在扩展里做全屏跟随；若个别站点仍被遮挡，可先退出全屏或反馈 issue |
+
+## 后续优化方向
+
+按优先级排列，欢迎针对任意一条提 PR：
+
+1. **端到端 ≤1s**（当前 1.66-2.54s）：继续压缩采集缓冲（`ScriptProcessor(4096)≈256ms` 已降到 2048）、评估 AudioWorklet 替代、ASR 侧缩短首条 partial 的攒帧窗口。
+2. **长句不分句**：流式 ASR 目前按块吐 partial，长句会被切成碎片；计划引入基于标点/停顿的分句合并，让译文成句。
+3. **短词幻觉**：静音段或极短音频偶尔会吐出无意义词；计划加 VAD 前置门限与最短语音时长判定。
+4. **ko 直连翻译**：韩语当前走 `ko→en→zh` 两跳，质量明显弱于 ja→zh；需要可离线部署的 ko→zh 直连模型（CT2 或 sherpa 生态内的可用权重）。
+5. **多语种嗅探提速**：自动识别模式下 2s 嗅探窗口偏保守，评估用更短窗口 + 置信度回退策略。
+6. **跨平台**：`启动.bat` 与部分路径处理是 Windows 专用；计划补 Linux/macOS 的启动脚本与 ffmpeg 兜底路径。
+7. **免 Python 体验**：参考同类项目的 Native Messaging 思路，让扩展一键拉起后端，用户不必手动双击启动脚本。
+
+## 许可证
+
+本项目以 [MIT](LICENSE) 许可证发布，© 2026 kongitt2026。
+
+第三方组件遵循各自许可证：sherpa-onnx（Apache-2.0）、CTranslate2（MIT）、Argos Translate（MIT）、faster-whisper（MIT）、FastAPI（MIT）、hls.js（Apache-2.0）。模型权重不在本仓库内分发，下载与使用请遵守其原始发布页的许可条款。
+
+## 贡献
+
+- 提 issue 请附：操作系统与 Python 版本、是否放了 ASR 模型、`logs/server.log` 相关片段、复现步骤。
+- 提 PR 前请确保 `tests/` 下相关用例通过，并说明改动对应「后续优化方向」的哪一条，或新增了什么场景。
+- 涉及模型、采样率、WS 协议格式的改动，请在 PR 描述里说明兼容性影响（浏览器扩展与服务端需要同步升级）。
