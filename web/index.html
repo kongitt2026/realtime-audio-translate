@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>实时音视频翻译</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f0f0f; color: #eee;
+         font-family: "Microsoft YaHei","PingFang SC","Noto Sans SC",
+                      "Yu Gothic","Meiryo","MS Gothic",sans-serif; }
+  header { padding: 12px 20px; display: flex; gap: 10px; align-items: center; background: #181818; }
+  header h1 { font-size: 16px; margin-right: 12px; white-space: nowrap; }
+  #url { flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #333;
+         background: #222; color: #eee; font-size: 13px; }
+  button { padding: 8px 18px; border: none; border-radius: 6px; cursor: pointer;
+           background: #1a73e8; color: #fff; font-size: 13px; }
+  button.stop { background: #444; }
+  #status { font-size: 12px; color: #888; min-width: 120px; }
+  #stage { position: relative; max-width: 1100px; margin: 16px auto; }
+  video { width: 100%; background: #000; border-radius: 8px; }
+  #subs {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 8%;
+    max-width: 85%; text-align: center; pointer-events: none;
+  }
+  #subs .orig { font-size: 14px; color: rgba(255,255,255,.65); text-shadow: 0 1px 3px #000; }
+  #subs .tran { font-size: 22px; color: #fff; background: rgba(0,0,0,.55);
+                padding: 4px 14px; border-radius: 6px; display: inline-block; margin-top: 2px; }
+  /* 语种字体栈：日文必须优先系统日文字体，否则 々/〜/①②/长音ー 会缺字或跳字体 */
+  #subs .lang-ja, #fileSubs.lang-ja {
+    font-family: "Yu Gothic","Hiragino Kaku Gothic ProN","Meiryo","MS Gothic",
+                 "Noto Sans CJK JP","Microsoft YaHei","PingFang SC",sans-serif; }
+  #subs .lang-ko, #fileSubs.lang-ko {
+    font-family: "Malgun Gothic","Yu Gothic","Microsoft YaHei",sans-serif; }
+  /* 本地字幕文件层：置顶，避免与 ASR 字幕层重叠 */
+  #fileSubs {
+    position: absolute; left: 50%; transform: translateX(-50%); top: 6%;
+    max-width: 85%; display: none; white-space: pre-line; text-align: center;
+    font-size: 20px; line-height: 1.4; color: #fff; background: rgba(0,0,0,.55);
+    padding: 5px 14px; border-radius: 6px; text-shadow: 0 1px 2px #000;
+    pointer-events: none;
+  }
+  #fileSubs.on { display: inline-block; }
+  #log { max-width: 1100px; margin: 0 auto 24px; font-size: 12px; color: #666;
+         max-height: 140px; overflow-y: auto; padding: 0 4px; }
+  #log div { padding: 2px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>实时音视频翻译</h1>
+  <input id="url" placeholder="粘贴流地址（HLS .m3u8 / mp4 / rtmp / rtsp）或本地文件路径，回车播放">
+  <button id="play">播放并翻译</button>
+  <button id="loadsub">载入字幕文件</button>
+  <input type="file" id="subfile" accept=".srt,.vtt,.ass,.ssa" style="display:none">
+  <button id="stop" class="stop">停止</button>
+  <span id="status">空闲</span>
+</header>
+<div id="stage">
+  <video id="video" controls muted></video>
+  <div id="fileSubs"></div>
+  <div id="subs">
+    <div class="orig" id="orig"></div>
+    <div class="tran" id="tran" style="display:none"></div>
+  </div>
+</div>
+<div id="log"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let hls = null, ws = null, clearTimer = null;
+
+function log(msg) {
+  const d = document.createElement('div');
+  d.textContent = new Date().toLocaleTimeString() + '  ' + msg;
+  $('log').prepend(d);
+}
+
+function setStatus(t) { $('status').textContent = t; }
+
+function connectWS() {
+  if (ws && ws.readyState === 1) return;
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'subtitle') showSub(m);
+    else if (m.type === 'status') setStatus(m.running ? '翻译中' : '已停止');
+  };
+  ws.onclose = () => setTimeout(connectWS, 1500);  // 自动重连
+}
+
+// 语种 → 字体类：日文/韩文必须换字体栈，否则特殊字符缺字（详见 CSS）
+function langClass(lang) {
+  const l = (lang || '').toLowerCase();
+  if (l.startsWith('ja')) return 'lang-ja';
+  if (l.startsWith('ko')) return 'lang-ko';
+  return '';
+}
+function applyLang(el, lang) {
+  el.classList.remove('lang-ja', 'lang-ko');
+  const c = langClass(lang);
+  if (c) el.classList.add(c);
+}
+
+function showSub(m) {
+  const o = $('orig'), t = $('tran');
+  const original = m.original || '', translated = m.translated || '';
+  // 主行永远显示可读内容：翻译为空/与原文相同时把原文放大，避免「只有小字」
+  const primary = (translated && translated !== original) ? translated : original;
+  applyLang(o, m.lang);
+  applyLang(t, m.target);
+  o.textContent = (primary !== original) ? original : '';
+  t.textContent = primary;
+  t.style.display = primary ? '' : 'none';
+  clearTimeout(clearTimer);
+  clearTimer = setTimeout(() => { $('orig').textContent=''; t.textContent=''; t.style.display='none'; }, 6000);
+}
+
+// ---- 本地字幕文件：服务端解析（编码自动识别）→ 按 currentTime 渲染 ----
+let fileCues = [], fileRaf = 0;
+
+async function loadSubFile(file) {
+  setStatus('解析字幕…');
+  try {
+    const buf = await file.arrayBuffer();
+    const r = await fetch('/api/subtitle/parse?name=' + encodeURIComponent(file.name),
+                          { method: 'POST', body: buf });
+    const d = await r.json();
+    if (!d.ok) { setStatus('字幕解析失败'); log('字幕解析失败: ' + d.error); return; }
+    fileCues = d.cues || [];
+    applyLang($('fileSubs'), d.lang_hint || '');
+    log(`字幕文件 ${file.name}：${(d.format || '').toUpperCase()} / 编码 ${d.encoding} / ` +
+        `${d.count} 条 / 语言提示 ${d.lang_hint || '无'}`);
+    setStatus(`字幕 ${d.count} 条`);
+    if (fileRaf) cancelAnimationFrame(fileRaf);
+    tickFileSub();
+  } catch (e) {
+    setStatus('字幕解析失败');
+    log('字幕解析异常: ' + e.message);
+  }
+}
+
+function tickFileSub() {
+  const v = $('video'), box = $('fileSubs'), t = v.currentTime;
+  const text = fileCues.filter(c => c.start <= t && t < c.end).map(c => c.text).join('\n');
+  if (text !== box.textContent) box.textContent = text;
+  box.classList.toggle('on', !!text);
+  fileRaf = requestAnimationFrame(tickFileSub);
+}
+
+function attachPlayer(src) {
+  const v = $('video');
+  if (hls) { hls.destroy(); hls = null; }
+  if (src.endsWith('.m3u8') && window.Hls && !v.canPlayType('application/vnd.apple.mpegurl')) {
+    hls = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 3 });
+    hls.loadSource(src); hls.attachMedia(v);
+  } else {
+    v.src = src;
+  }
+  v.play().catch(() => log('浏览器阻止自动播放，请点播放按钮'));
+}
+
+async function play() {
+  const url = $('url').value.trim();
+  if (!url) return;
+  setStatus('启动中…');
+  log('请求播放: ' + url);
+  const resp = await fetch('/api/play', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ url })
+  });
+  const data = await resp.json();
+  if (!data.ok) { setStatus('启动失败'); log('错误: ' + data.error); return; }
+  attachPlayer(data.player_url);
+  setStatus('翻译中');
+  log('播放器接入: ' + data.player_url + (data.scheme ? ' (' + data.scheme + ')' : ''));
+}
+
+$('play').onclick = play;
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') play(); });
+$('loadsub').onclick = () => $('subfile').click();
+$('subfile').onchange = e => {
+  const f = e.target.files && e.target.files[0];
+  if (f) loadSubFile(f);
+  e.target.value = '';   // 允许重复选同一个文件（改编码后复测）
+};
+$('stop').onclick = async () => {
+  await fetch('/api/stop', { method: 'POST' });
+  const v = $('video'); v.pause(); v.removeAttribute('src'); v.load();
+  if (hls) { hls.destroy(); hls = null; }
+  setStatus('已停止');
+};
+connectWS();
+</script>
+</body>
+</html>

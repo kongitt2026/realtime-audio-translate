@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "offline-translate"
+version = "1.0.0"
+description = "中日韩英文本翻译：Google 免费端点优先，Argos 离线兜底（0 元，可嵌入任意 Python 项目）"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["httpx>=0.24"]
+
+[project.optional-dependencies]
+# 离线兜底（断网/限流时用）：pip install -e ".[offline]"
+offline = ["argostranslate>=1.9"]
+# 本地 HTTP 服务适配（复用本项目 server/main.py 时可装）
+server = ["fastapi>=0.110", "uvicorn>=0.27"]
+
+[project.scripts]
+xlate = "offline_translate.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["offline_translate*"]

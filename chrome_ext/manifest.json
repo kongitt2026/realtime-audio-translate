@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "实时字幕翻译（本地）",
+  "version": "1.1.0",
+  "description": "任意网页视频一键实时语音识别 + 翻译为中文字幕，可自选视频语种；全部本地推理，不经过第三方云服务。",
+  "minimum_chrome_version": "116",
+  "permissions": ["tabCapture", "offscreen", "scripting", "activeTab", "tabs", "storage"],
+  "host_permissions": ["http://127.0.0.1:8790/*", "<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "实时字幕翻译（点开选语种 / 开始停止）",
+    "default_popup": "popup.html"
+  },
+  "commands": {
+    "toggle": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "开始/停止当前标签页的实时字幕翻译（使用上次选择的语种）"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}

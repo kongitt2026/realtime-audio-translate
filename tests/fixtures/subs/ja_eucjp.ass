@@ -1,0 +1,14 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize
+Style: Default,Arial,20
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.50,0:00:02.00,Default,,0,0,0,,{\an8}おはようございます。
+Dialogue: 0,0:00:02.50,0:00:04.00,Default,,0,0,0,,{\an8}「こんにちは」とカタカナの「ヴァイオリン」。
+Dialogue: 0,0:00:04.50,0:00:06.00,Default,,0,0,0,,{\an8}波ダッシュ〜と同の字点々を確認します。
